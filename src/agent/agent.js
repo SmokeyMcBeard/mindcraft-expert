@@ -1,6 +1,6 @@
 import { History } from './history.js';
 import { Coder } from './coder.js';
-import { VisionInterpreter } from './vision/vision_interpreter.js';
+
 import { Prompter } from '../models/prompter.js';
 import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
@@ -111,7 +111,15 @@ export class Agent {
                 clearTimeout(spawnTimeout);
                 addBrowserViewer(this.bot, count_id);
                 console.log('Initializing vision intepreter...');
-                this.vision_interpreter = new VisionInterpreter(this, settings.allow_vision);
+                if (settings.allow_vision) {
+                    const { VisionInterpreter } = await import('./vision/vision_interpreter.js');
+                    this.vision_interpreter = new VisionInterpreter(this, true);
+                } else {
+                    this.vision_interpreter = {
+                        lookAtPlayer: async () => 'Vision is disabled. Use other methods to describe the environment.',
+                        lookAtPosition: async () => 'Vision is disabled. Use other methods to describe the environment.'
+                    };
+                }
 
                 // wait for a bit so stats are not undefined
                 await new Promise((resolve) => setTimeout(resolve, 1000));
