@@ -414,6 +414,21 @@ export async function defendSelf(bot, range=9) {
 
 
 
+function isBlockUnderPlayer(bot, block) {
+    const feet = bot.entity?.position;
+    if (!block?.position) return false;
+    if (!feet) return true;
+
+    const halfWidth = (bot.entity.width ?? 0.6) / 2;
+    const target = block.position;
+
+    return target.y < feet.y &&
+        feet.x + halfWidth > target.x &&
+        feet.x - halfWidth < target.x + 1 &&
+        feet.z + halfWidth > target.z &&
+        feet.z - halfWidth < target.z + 1;
+}
+
 export async function collectBlock(bot, blockType, num=1, exclude=null) {
     /**
      * Collect one of the given block type.
@@ -443,7 +458,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     let collected = 0;
 
     const movements = new pf.Movements(bot);
-    movements.dontMineUnderFallingBlock = false;
+    movements.dontMineUnderFallingBlock = true;
     movements.dontCreateFlow = true;
 
     // Blocks to ignore safety for, usually next to lava/water
@@ -454,6 +469,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             if (!blocktypes.includes(block.name)) {
                 return false;
             }
+            if (isBlockUnderPlayer(bot, block)) return false;
             if (exclude) {
                 for (let position of exclude) {
                     if (block.position.x === position.x && block.position.y === position.y && block.position.z === position.z) {
@@ -511,7 +527,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             await autoLight(bot);
         }
         catch (err) {
-            if (err.name === 'NoChests') {
+            if (err.name === 'UnsafeMining') {
+                log(bot, 'Collection stopped: ' + err.message);
+                break;
+            }
+            else if (err.name === 'NoChests') {
                 log(bot, `Failed to collect ${blockType}: Inventory full, no place to deposit.`);
                 break;
             }
@@ -1875,7 +1895,7 @@ function stringifyTrades(bot, trades) {
     return trades.map((trade) => {
         let text = stringifyItem(bot, trade.inputItem1);
         if (trade.inputItem2) text += ` & ${stringifyItem(bot, trade.inputItem2)}`;
-        if (trade.disabled) text += ' x '; else text += ' » ';
+        if (trade.disabled) text += ' x '; else text += ' Â» ';
         text += stringifyItem(bot, trade.outputItem);
         return `(${trade.nbTradeUses}/${trade.maximumNbTradeUses}) ${text}`;
     });
@@ -1962,20 +1982,34 @@ export async function digDown(bot, distance = 10) {
 
 export async function goToSurface(bot) {
     /**
-     * Navigate to the surface (highest non-air block at current x,z).
-     * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @returns {Promise<boolean>} true if the surface was reached, false otherwise.
-     **/
-    const pos = bot.entity.position;
-    for (let y = 360; y > -64; y--) { // probably not the best way to find the surface but it works
+     * Navigate to the highest known terrain in the current column.
+     * This is not yet a complete surface-escape strategy.
+     * @returns {Promise<boolean>} whether the destination was reached.
+     */
+    const pos = bot.entity.position.clone();
+
+    for (let y = 360; y > -64; y--) {
         const block = bot.blockAt(new Vec3(pos.x, y, pos.z));
-        if (!block || block.name === 'air' || block.name === 'cave_air') {
+
+        if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) {
             continue;
         }
-        await goToPosition(bot, block.position.x, block.position.y + 1, block.position.z, 0); // this will probably work most of the time but a custom mining and towering up implementation could be added if needed
-        log(bot, `Going to the surface at y=${y+1}.`);``
+
+        const target = block.position.offset(0, 1, 0);
+        const reached = await goToPosition(
+            bot, target.x, target.y, target.z, 0
+        );
+
+        if (!reached) {
+            log(bot, 'Failed to reach the selected terrain height.');
+            return false;
+        }
+
+        log(bot, 'Reached the selected column height; exterior surface not independently verified.');
         return true;
     }
+
+    log(bot, 'No suitable terrain column found.');
     return false;
 }
 

@@ -1,0 +1,84 @@
+diff --git a/node_modules/mineflayer-collectblock/lib/CollectBlock.js b/node_modules/mineflayer-collectblock/lib/CollectBlock.js
+index 445df38..c9dbc8e 100644
+--- a/node_modules/mineflayer-collectblock/lib/CollectBlock.js
++++ b/node_modules/mineflayer-collectblock/lib/CollectBlock.js
+@@ -18,6 +18,26 @@ const BlockVeins_1 = require("./BlockVeins");
+ const Targets_1 = require("./Targets");
+ const events_1 = require("events");
+ const util_1 = require("util");
++function navigateWithoutExcavation(bot, goal) {
++    return __awaiter(this, void 0, void 0, function* () {
++        const movements = bot.pathfinder.movements;
++        if (!movements) throw new Error('Pathfinder movements unavailable.');
++
++        const previousCanDig = movements.canDig;
++        const previousAllowTowers = movements.allow1by1towers;
++
++        try {
++            movements.canDig = false;
++            movements.allow1by1towers = false;
++            yield bot.pathfinder.goto(goal);
++        }
++        finally {
++            movements.canDig = previousCanDig;
++            movements.allow1by1towers = previousAllowTowers;
++        }
++    });
++}
++
+ function collectAll(bot, options) {
+     return __awaiter(this, void 0, void 0, function* () {
+         while (!options.targets.empty) {
+@@ -28,7 +48,7 @@ function collectAll(bot, options) {
+             switch (closest.constructor.name) {
+                 case 'Block': {
+                     const goal = new mineflayer_pathfinder_1.goals.GoalLookAtBlock(closest.position, bot.world);
+-                    yield bot.pathfinder.goto(goal);
++                    yield navigateWithoutExcavation(bot, goal);
+                     yield mineBlock(bot, closest, options);
+                     // TODO: options.ignoreNoPath
+                     break;
+@@ -46,7 +66,7 @@ function collectAll(bot, options) {
+                             }
+                         });
+                     });
+-                    yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
++                    yield navigateWithoutExcavation(bot, new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
+                     yield waitForPickup;
+                     break;
+                 }
+@@ -83,6 +103,23 @@ function mineBlock(bot, block, options) {
+             }
+         });
+         try {
++            const feet = bot.entity?.position;
++            const halfWidth = (bot.entity?.width ?? 0.6) / 2;
++            const target = block.position;
++
++            const underFootprint = !feet || (
++                target.y < feet.y &&
++                feet.x + halfWidth > target.x &&
++                feet.x - halfWidth < target.x + 1 &&
++                feet.z + halfWidth > target.z &&
++                feet.z - halfWidth < target.z + 1
++            );
++
++            if (underFootprint) {
++                const err = new Error('Refusing to mine beneath the player footprint.');
++                err.name = 'UnsafeMining';
++                throw err;
++            }
+             yield bot.dig(block);
+             // Waiting for items to drop
+             yield new Promise(resolve => {
+@@ -190,8 +227,8 @@ class CollectBlock {
+                 throw (0, Util_1.error)('UnresolvedDependency', 'The mineflayer-collectblock plugin relies on the mineflayer-tool plugin to run!');
+             }
+             if (this.movements != null) {
+-                this.movements.dontMineUnderFallingBlock = false;
+-                this.movements.dontCreateFlow = false;
++                this.movements.dontMineUnderFallingBlock = true;
++                this.movements.dontCreateFlow = true;
+                 this.bot.pathfinder.setMovements(this.movements);
+             }
+             if (!optionsFull.append)
