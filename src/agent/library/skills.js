@@ -1,6 +1,7 @@
 import * as mc from "../../utils/mcdata.js";
 import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
+import { configureConservativeTravel } from './safe_travel.js';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
 
@@ -1087,7 +1088,23 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     return false;
 }
 
-export async function goToGoal(bot, goal) {
+export async function goToGoal(bot, goal, policy = 'existing') {
+    if (policy === 'safe_travel') {
+        const movements = configureConservativeTravel(new pf.Movements(bot), bot.registry);
+        const inspection = bot.pathfinder.getPathTo(movements, goal, 1500);
+        if (inspection?.status !== 'success') {
+            log(bot, `Safe travel route unavailable (${inspection?.status ?? 'unknown'}). No digging or placement attempted.`);
+            return false;
+        }
+        bot.pathfinder.setMovements(movements);
+        const doorInterval = startDoorInterval(bot);
+        try {
+            await bot.pathfinder.goto(goal);
+            return true;
+        } finally {
+            clearInterval(doorInterval);
+        }
+    }
     /**
      * Navigate to the given goal. Use doors and attempt minimally destructive movements.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -1342,9 +1359,13 @@ export async function goToPlayer(bot, username, distance=3) {
     distance = Math.max(distance, 0.5);
     const goal = new pf.goals.GoalFollow(player, distance);
 
-    await goToGoal(bot, goal, true);
-
+    const reached = await goToGoal(bot, goal, 'safe_travel');
+    if (!reached) {
+        log(bot, `Cannot safely reach ${username} by ordinary travel. Need a separate, deliberate route or excavation plan.`);
+        return false;
+    }
     log(bot, `You have reached ${username}.`);
+    return true;
 }
 
 
@@ -1361,8 +1382,7 @@ export async function followPlayer(bot, username, distance=4) {
     if (!player)
         return false;
 
-    const move = new pf.Movements(bot);
-    move.digCost = 10;
+    const move = configureConservativeTravel(new pf.Movements(bot), bot.registry);
     bot.pathfinder.setMovements(move);
     let doorCheckInterval = startDoorInterval(bot);
 
