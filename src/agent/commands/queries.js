@@ -1,4 +1,5 @@
 import * as world from '../library/world.js';
+import { getTerrainReport } from '../library/terrain.js';
 import * as mc from '../../utils/mcdata.js';
 import { getCommandDocs } from './index.js';
 import convoManager from '../conversation.js';
@@ -11,6 +12,13 @@ const pad = (str) => {
 
 // queries are commands that just return strings and don't affect anything in the world
 export const queryList = [
+    {
+        name: "!terrain",
+        description: "Read-only terrain snapshot: immediate footing, adjacent steps and drops, nearby fluids and hazards, and unknown blocks. No route guarantees.",
+        perform: function (agent) {
+            return '\n' + getTerrainReport(agent.bot) + '\n';
+        }
+    },
     {
         name: "!stats",
         description: "Get your bot's location, health, hunger, and time of day.", 
