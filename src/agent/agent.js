@@ -337,6 +337,13 @@ export class Agent {
             let command_name = containsCommand(res);
 
             if (command_name) { // contains query or command
+                // Only a direct player-issued !goal may initiate an indefinite autonomous task.
+                if (command_name === '!goal') {
+                    const warning = 'Starting an autonomous goal requires a direct player !goal command.';
+                    await this.history.add('system', warning);
+                    this.routeResponse(source, warning);
+                    break;
+                }
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
                 
@@ -368,6 +375,11 @@ export class Agent {
                 }
 
                 let execute_res = await executeCommand(this, res);
+                if (self_prompt && this.self_prompter.loop_active) {
+                    const failed = typeof execute_res === 'string' &&
+                        /not found|not exist|an error occurred|error fetching|following error occurred|request failed|HTTP 429/i.test(execute_res);
+                    this.last_autonomous_command = { name: command_name, failed };
+                }
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;

@@ -58,32 +58,70 @@ export class SelfPrompter {
             console.warn('Self-prompt loop is already active. Ignoring request.');
             return;
         }
-        console.log('starting self-prompt loop')
+        console.log('starting self-prompt loop');
         this.loop_active = true;
         let no_command_count = 0;
+        let command_count = 0;
+        let wiki_count = 0;
+        let failed_wiki_count = 0;
         const MAX_NO_COMMAND = 3;
-        while (!this.interrupt) {
-            const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
-            
-            let used_command = await this.agent.handleMessage('system', msg, -1);
-            if (!used_command) {
-                no_command_count++;
-                if (no_command_count >= MAX_NO_COMMAND) {
-                    let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
-                    this.agent.openChat(out);
-                    console.warn(out);
+        const MAX_COMMANDS = 20;
+        const MAX_WIKI_SEARCHES = 3;
+        const MAX_FAILED_WIKI_SEARCHES = 2;
+        let stopReason = null;
+        try {
+            while (!this.interrupt && this.state === ACTIVE) {
+                const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
+                // Exactly one generated command per cycle, never unlimited (-1).
+                this.agent.last_autonomous_command = null;
+                const used_command = await this.agent.handleMessage('system', msg, 1);
+                if (this.interrupt || this.state !== ACTIVE) break;
+
+                if (!used_command) {
+                    no_command_count++;
+                    if (no_command_count >= MAX_NO_COMMAND) {
+                        stopReason = `No command after ${MAX_NO_COMMAND} autonomous prompts. Goal stopped.`;
+                    }
+                } else {
+                    no_command_count = 0;
+                    command_count++;
+                    const last = this.agent.last_autonomous_command;
+                    if (last?.name === '!searchWiki') {
+                        wiki_count++;
+                        failed_wiki_count = last.failed ? failed_wiki_count + 1 : 0;
+                        if (wiki_count >= MAX_WIKI_SEARCHES || failed_wiki_count >= MAX_FAILED_WIKI_SEARCHES) {
+                            stopReason = 'Wiki research limit reached. Autonomous goal stopped; ask the player for direction.';
+                        }
+                    } else {
+                        failed_wiki_count = 0;
+                    }
+                    if (command_count >= MAX_COMMANDS) {
+                        stopReason = 'Autonomous command budget exhausted. Goal stopped; ask the player for direction.';
+                    }
+                }
+                if (stopReason) {
+                    console.warn(stopReason);
                     this.state = STOPPED;
+                    this.prompt = '';
                     break;
                 }
+                if (used_command) await new Promise(r => setTimeout(r, this.cooldown));
             }
-            else {
-                no_command_count = 0;
-                await new Promise(r => setTimeout(r, this.cooldown));
+        } catch (err) {
+            console.error('Self-prompt loop failed:', err);
+            this.state = STOPPED;
+            this.prompt = '';
+        } finally {
+            console.log('self prompt loop stopped');
+            this.loop_active = false;
+            this.interrupt = false;
+            if (this.state === STOPPED) {
+                if (stopReason) void this.agent.openChat(stopReason);
+                // Persist STOPPED so an old goal cannot restart after process restart.
+                try { await this.agent.history.save(); }
+                catch (err) { console.error('Failed to persist stopped goal:', err); }
             }
         }
-        console.log('self prompt loop stopped')
-        this.loop_active = false;
-        this.interrupt = false;
     }
 
     update(delta) {
@@ -118,11 +156,13 @@ export class SelfPrompter {
     }
 
     async stop(stop_action=true) {
-        this.interrupt = true;
-        if (stop_action)
-            await this.agent.actions.stop();
-        this.stopLoop();
+        // Mark stopped before awaiting action cancellation.
+        // Do not await loop drain here: !endGoal may run inside that very loop.
         this.state = STOPPED;
+        this.prompt = '';
+        this.interrupt = true;
+        if (stop_action) await this.agent.actions.stop();
+        if (!this.loop_active) this.interrupt = false;
     }
 
     async pause() {
@@ -133,7 +173,7 @@ export class SelfPrompter {
     }
 
     shouldInterrupt(is_self_prompt) { // to be called from handleMessage
-        return is_self_prompt && (this.state === ACTIVE || this.state === PAUSED) && this.interrupt;
+        return is_self_prompt && (this.interrupt || (this.loop_active && this.state === STOPPED));
     }
 
     handleUserPromptedCmd(is_self_prompt, is_action) {

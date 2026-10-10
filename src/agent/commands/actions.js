@@ -54,14 +54,13 @@ export const actionsList = [
         name: '!stop',
         description: 'Force stop all actions and commands that are currently executing.',
         perform: async function (agent) {
+            await agent.self_prompter.stop(false);
             await agent.actions.stop();
             agent.clearBotLogs();
             agent.actions.cancelResume();
             agent.bot.emit('idle');
-            let msg = 'Agent stopped.';
-            if (agent.self_prompter.isActive())
-                msg += ' Self-prompting still active.';
-            return msg;
+            await agent.history.save();
+            return 'Agent stopped; autonomous goal ended.';
         }
     },
     {
@@ -379,8 +378,10 @@ export const actionsList = [
         name: '!endGoal',
         description: 'Call when you have accomplished your goal. It will stop self-prompting and the current action. ',
         perform: async function (agent) {
-            agent.self_prompter.stop();
-            return 'Self-prompting stopped.';
+            await agent.self_prompter.stop();
+            agent.actions.cancelResume();
+            await agent.history.save();
+            return 'Self-prompting stopped and saved.';
         }
     },
     {
